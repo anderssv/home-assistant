@@ -22,6 +22,12 @@ SUPPORT_PIONEER = SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE
 MAX_VOLUME = 185
 MAX_SOURCE_NUMBERS = 60
 
+INPUT_SOURCES = {
+    "01": "CD",
+    "06": "SAT/CABLE",
+    "15": "DVR/BDR",
+}
+
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Setup the Pioneer platform."""
@@ -114,19 +120,9 @@ class PioneerDevice(MediaPlayerDevice):
         return SUPPORT_PIONEER
 
     @property
-    def source(self):
-        """Return the current input source."""
-        return self._selected_source
-
-    @property
-    def source_list(self):
-        """List of available input sources."""
-        return ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"]
-
-    @property
     def media_title(self):
         """Title of current playing media."""
-        return self._selected_source
+        return self._source_resolve(self._selected_source[2:])
 
     def turn_off(self):
         """Turn off media player."""
@@ -138,4 +134,29 @@ class PioneerDevice(MediaPlayerDevice):
 
     def select_source(self, source):
         """Select input source."""
-        self.telnet_command(source + "FN")
+        set_source = source
+        for source_key, source_name in INPUT_SOURCES.items():
+            if source_name == source:
+                set_source = source_key
+                break
+
+        self.telnet_command(set_source + "FN")
+
+
+    @property
+    def source(self):
+        """Return the current input source."""
+        return self._source_resolve(self._selected_source[2:])
+
+
+    def _source_resolve(self, source):
+        """Do some fuzzy resolving to handle unknown sources as we don't have the complete list"""
+        if source in INPUT_SOURCES:
+            return INPUT_SOURCES[source]
+        else:
+            return source
+
+    @property
+    def source_list(self):
+        """List of available input sources."""
+        return list(INPUT_SOURCES.values())
