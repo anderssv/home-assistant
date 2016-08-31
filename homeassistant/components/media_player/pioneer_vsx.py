@@ -25,7 +25,7 @@ MAX_SOURCE_NUMBERS = 60
 INPUT_SOURCES = {
     "01": "CD",
     "06": "SAT/CABLE",
-    "15": "DVR/BDR",
+    "15": "DVR/BDR"
 }
 
 
