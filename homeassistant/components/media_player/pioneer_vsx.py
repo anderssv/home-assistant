@@ -80,7 +80,7 @@ class PioneerDevice(MediaPlayerDevice):
 
     def telnet_command(self, command):
         """Establish a telnet connection and sends `command`."""
-        telnet = telnetlib.Telnet(self._host, self._port)
+        telnet = telnetlib.Telnet(self._host, self._port, timeout=10)
         telnet.write(command.encode("ASCII") + b"\r")
         telnet.read_very_eager()  # skip response
         telnet.close()
