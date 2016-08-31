@@ -88,7 +88,7 @@ class PioneerDevice(MediaPlayerDevice):
     def update(self):
         """Get the latest details from the device."""
         try:
-            telnet = telnetlib.Telnet(self._host, self._port)
+            telnet = telnetlib.Telnet(self._host, self._port, timeout=5)
         except ConnectionRefusedError:
             return False
 
