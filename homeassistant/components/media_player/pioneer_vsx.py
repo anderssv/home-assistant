@@ -2,7 +2,11 @@
 Support for Pioneer Network Receivers.
 
 For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/media_player.pioneer/
+https://home-assistant.io/components/media_player.pioneer_vsx/
+
+Pioneer VSX receivers has a bug where telnet stops responding. So we need to support UNKNOWN state and keep checking
+to catch when the reciver is back.
+
 """
 import logging
 import telnetlib
@@ -60,7 +64,7 @@ class PioneerDevice(MediaPlayerDevice):
         self._name = name
         self._host = host
         self._port = port if port else 8102
-        self._pwstate = "PWR1"
+        self._pwstate = "UNKNOW"
         self._selected_source = ''
 
     @classmethod
@@ -80,24 +84,36 @@ class PioneerDevice(MediaPlayerDevice):
 
     def telnet_command(self, command):
         """Establish a telnet connection and sends `command`."""
-        telnet = telnetlib.Telnet(self._host, self._port, timeout=10)
-        telnet.write(command.encode("ASCII") + b"\r")
-        telnet.read_very_eager()  # skip response
-        telnet.close()
+        try:
+            telnet = telnetlib.Telnet(self._host, self._port, timeout=10)
+            telnet.write(command.encode("ASCII") + b"\r")
+            telnet.read_very_eager()  # skip response
+        except Exception as e:
+            self.set_unknown_state()
+        finally:
+            if telnet:
+                telnet.close()
 
     def update(self):
         """Get the latest details from the device."""
         try:
             telnet = telnetlib.Telnet(self._host, self._port, timeout=5)
-        except ConnectionRefusedError:
-            return False
 
-        self._pwstate = self.telnet_request(telnet, "?P", "PWR")
+            self._pwstate = self.telnet_request(telnet, "?P", "PWR")
 
-        self._selected_source = self.telnet_request(telnet, "?F", "FN")
+            self._selected_source = self.telnet_request(telnet, "?F", "FN")
 
-        telnet.close()
-        return True
+            return True
+        except Exception as e:
+            self.set_unknown_state()
+            return True
+        finally:
+            if telnet:
+                telnet.close()
+
+    def set_unknown_state(self):
+        self._pwstate = "UNKNOWN"
+        self._selected_source = None
 
     @property
     def name(self):
@@ -109,7 +125,7 @@ class PioneerDevice(MediaPlayerDevice):
         """Return the state of the device."""
         if self._pwstate == "PWR1" or self._pwstate == "PWR2":
             return STATE_OFF
-        if self._pwstate == "PWR0":
+        elif self._pwstate == "PWR0":
             return STATE_ON
 
         return STATE_UNKNOWN
