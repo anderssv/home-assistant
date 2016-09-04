@@ -138,7 +138,9 @@ class PioneerDevice(MediaPlayerDevice):
     @property
     def media_title(self):
         """Title of current playing media."""
-        return self._source_resolve(self._selected_source[2:])
+        if self._selected_source:
+            return self._source_resolve(self._selected_source[2:])
+        return "Unknown"
 
     def turn_off(self):
         """Turn off media player."""
