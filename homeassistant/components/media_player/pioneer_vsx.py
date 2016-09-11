@@ -4,16 +4,16 @@ Support for Pioneer Network Receivers.
 For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/media_player.pioneer_vsx/
 
-Pioneer VSX receivers has a bug where telnet stops responding. So we need to support UNKNOWN state and keep checking
-to catch when the reciver is back.
+Pioneer VSX receivers has a bug where telnet stops responding. So we need to
+support UNKNOWN state and keep checking to catch when the receiver is back.
 
 """
 import logging
 import telnetlib
 
 from homeassistant.components.media_player import (
-    DOMAIN, SUPPORT_PAUSE, SUPPORT_SELECT_SOURCE,
-    SUPPORT_TURN_OFF, SUPPORT_TURN_ON, SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET,
+    DOMAIN, SUPPORT_SELECT_SOURCE,
+    SUPPORT_TURN_OFF, SUPPORT_TURN_ON, SUPPORT_VOLUME_MUTE,
     MediaPlayerDevice)
 from homeassistant.const import (
     CONF_HOST, CONF_PORT, STATE_OFF, STATE_ON, STATE_UNKNOWN,
@@ -21,10 +21,8 @@ from homeassistant.const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SUPPORT_PIONEER = SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE
-
-MAX_VOLUME = 185
-MAX_SOURCE_NUMBERS = 60
+SUPPORT_PIONEER = SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE \
+                  | SUPPORT_VOLUME_MUTE
 
 INPUT_SOURCES = {
     "01": "CD",
@@ -66,6 +64,7 @@ class PioneerDevice(MediaPlayerDevice):
         self._port = port if port else 8102
         self._pwstate = "UNKNOW"
         self._selected_source = ''
+        self._muted = False
 
     @classmethod
     def telnet_request(cls, telnet, command, expected_prefix):
@@ -84,11 +83,12 @@ class PioneerDevice(MediaPlayerDevice):
 
     def telnet_command(self, command):
         """Establish a telnet connection and sends `command`."""
+        # noinspection PyBroadException
         try:
             telnet = telnetlib.Telnet(self._host, self._port, timeout=10)
             telnet.write(command.encode("ASCII") + b"\r")
             telnet.read_very_eager()  # skip response
-        except Exception as e:
+        except Exception:
             self.set_unknown_state()
         finally:
             if telnet:
@@ -103,8 +103,11 @@ class PioneerDevice(MediaPlayerDevice):
 
             self._selected_source = self.telnet_request(telnet, "?F", "FN")
 
+            muted_value = self.telnet_request(telnet, "?M", "MUT")
+            self._muted = (muted_value == "MUT0") if muted_value else None
+
             return True
-        except Exception as e:
+        except Exception:
             self.set_unknown_state()
             return True
         finally:
@@ -112,6 +115,7 @@ class PioneerDevice(MediaPlayerDevice):
                 telnet.close()
 
     def set_unknown_state(self):
+        """Resetting to unknown state when errors occurs."""
         self._pwstate = "UNKNOWN"
         self._selected_source = None
 
@@ -160,15 +164,17 @@ class PioneerDevice(MediaPlayerDevice):
 
         self.telnet_command(set_source + "FN")
 
-
     @property
     def source(self):
         """Return the current input source."""
         return self._source_resolve(self._selected_source[2:])
 
-
-    def _source_resolve(self, source):
-        """Do some fuzzy resolving to handle unknown sources as we don't have the complete list"""
+    @staticmethod
+    def _source_resolve(source):
+        """
+        Do some fuzzy resolving to handle unknown sources as we don't have
+        the complete list.
+        """
         if source in INPUT_SOURCES:
             return INPUT_SOURCES[source]
         else:
@@ -178,3 +184,12 @@ class PioneerDevice(MediaPlayerDevice):
     def source_list(self):
         """List of available input sources."""
         return list(INPUT_SOURCES.values())
+
+    def mute_volume(self, mute):
+        """Mute (true) or unmute (false) media player."""
+        self.telnet_command("MO" if mute else "MF")
+
+    @property
+    def is_volume_muted(self):
+        """Boolean if volume is currently muted."""
+        return self._muted
