@@ -96,6 +96,7 @@ class PioneerDevice(MediaPlayerDevice):
 
     def update(self):
         """Get the latest details from the device."""
+        # noinspection PyBroadException
         try:
             telnet = telnetlib.Telnet(self._host, self._port, timeout=5)
 
@@ -171,7 +172,8 @@ class PioneerDevice(MediaPlayerDevice):
 
     @staticmethod
     def _source_resolve(source):
-        """
+        """Fuzzy resolve source name.
+
         Do some fuzzy resolving to handle unknown sources as we don't have
         the complete list.
         """
