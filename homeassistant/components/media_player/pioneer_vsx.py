@@ -10,6 +10,7 @@ support UNKNOWN state and keep checking to catch when the receiver is back.
 """
 import logging
 import telnetlib
+import socket
 
 from homeassistant.components.media_player import (
     DOMAIN, SUPPORT_SELECT_SOURCE,
@@ -83,12 +84,11 @@ class PioneerDevice(MediaPlayerDevice):
 
     def telnet_command(self, command):
         """Establish a telnet connection and sends `command`."""
-        # noinspection PyBroadException
         try:
             telnet = telnetlib.Telnet(self._host, self._port, timeout=10)
             telnet.write(command.encode("ASCII") + b"\r")
             telnet.read_very_eager()  # skip response
-        except Exception:
+        except (EOFError, socket.error):
             self.set_unknown_state()
         finally:
             if telnet:
@@ -96,7 +96,6 @@ class PioneerDevice(MediaPlayerDevice):
 
     def update(self):
         """Get the latest details from the device."""
-        # noinspection PyBroadException
         try:
             telnet = telnetlib.Telnet(self._host, self._port, timeout=5)
 
@@ -108,7 +107,7 @@ class PioneerDevice(MediaPlayerDevice):
             self._muted = (muted_value == "MUT0") if muted_value else None
 
             return True
-        except Exception:
+        except (EOFError, socket.error):
             self.set_unknown_state()
             return True
         finally:
@@ -149,6 +148,7 @@ class PioneerDevice(MediaPlayerDevice):
 
     def turn_off(self):
         """Turn off media player."""
+
         self.telnet_command("PF")
 
     def turn_on(self):
