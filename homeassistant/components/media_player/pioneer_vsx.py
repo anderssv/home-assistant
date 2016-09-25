@@ -96,6 +96,7 @@ class PioneerDevice(MediaPlayerDevice):
 
     def update(self):
         """Get the latest details from the device."""
+        telnet = None
         try:
             telnet = telnetlib.Telnet(self._host, self._port, timeout=5)
 
