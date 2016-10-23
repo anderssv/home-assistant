@@ -1,5 +1,4 @@
 """The tests for the InfluxDB component."""
-import copy
 import unittest
 from unittest import mock
 
@@ -17,6 +16,7 @@ class TestInfluxDB(unittest.TestCase):
     def setUp(self):
         """Setup things to be run when tests are started."""
         self.hass = mock.MagicMock()
+        self.hass.pool.worker_count = 2
         self.handler_method = None
 
     def test_setup_config_full(self, mock_client):
@@ -34,8 +34,8 @@ class TestInfluxDB(unittest.TestCase):
         }
         assert setup_component(self.hass, influxdb.DOMAIN, config)
         self.assertTrue(self.hass.bus.listen.called)
-        self.assertEqual(EVENT_STATE_CHANGED,
-                         self.hass.bus.listen.call_args_list[0][0][0])
+        self.assertEqual(
+            EVENT_STATE_CHANGED, self.hass.bus.listen.call_args_list[0][0][0])
         self.assertTrue(mock_client.return_value.query.called)
 
     def test_setup_config_defaults(self, mock_client):
@@ -49,21 +49,26 @@ class TestInfluxDB(unittest.TestCase):
         }
         assert setup_component(self.hass, influxdb.DOMAIN, config)
         self.assertTrue(self.hass.bus.listen.called)
-        self.assertEqual(EVENT_STATE_CHANGED,
-                         self.hass.bus.listen.call_args_list[0][0][0])
+        self.assertEqual(
+            EVENT_STATE_CHANGED, self.hass.bus.listen.call_args_list[0][0][0])
 
-    def test_setup_missing_keys(self, mock_client):
-        """Test the setup with missing keys."""
+    def test_setup_minimal_config(self, mock_client):
+        """Test the setup with minimal configuration."""
+        config = {
+            'influxdb': {}
+        }
+
+        assert setup_component(self.hass, influxdb.DOMAIN, config)
+
+    def test_setup_missing_password(self, mock_client):
+        """Test the setup with existing username and missing password."""
         config = {
             'influxdb': {
-                'username': 'user',
-                'password': 'pass',
+                'username': 'user'
             }
         }
-        for missing in config['influxdb'].keys():
-            config_copy = copy.deepcopy(config)
-            del config_copy['influxdb'][missing]
-            assert not setup_component(self.hass, influxdb.DOMAIN, config_copy)
+
+        assert not setup_component(self.hass, influxdb.DOMAIN, config)
 
     def test_setup_query_fail(self, mock_client):
         """Test the setup for query failures."""
@@ -95,19 +100,22 @@ class TestInfluxDB(unittest.TestCase):
         """Test the event listener."""
         self._setup()
 
-        valid = {'1': 1,
-                 '1.0': 1.0,
-                 STATE_ON: 1,
-                 STATE_OFF: 0,
-                 'foo': 'foo'}
+        valid = {
+            '1': 1,
+            '1.0': 1.0,
+            STATE_ON: 1,
+            STATE_OFF: 0,
+            'foo': 'foo'
+        }
         for in_, out in valid.items():
-            attrs = {'unit_of_measurement': 'foobars'}
-            state = mock.MagicMock(state=in_,
-                                   domain='fake',
-                                   object_id='entity',
-                                   attributes=attrs)
-            event = mock.MagicMock(data={'new_state': state},
-                                   time_fired=12345)
+            attrs = {
+                'unit_of_measurement': 'foobars',
+                'longitude': '1.1',
+                'latitude': '2.2'
+            }
+            state = mock.MagicMock(
+                state=in_, domain='fake', object_id='entity', attributes=attrs)
+            event = mock.MagicMock(data={'new_state': state}, time_fired=12345)
             body = [{
                 'measurement': 'foobars',
                 'tags': {
@@ -117,10 +125,18 @@ class TestInfluxDB(unittest.TestCase):
                 'time': 12345,
                 'fields': {
                     'value': out,
+                    'longitude': '1.1',
+                    'latitude': '2.2'
                 },
             }]
             self.handler_method(event)
-            mock_client.return_value.write_points.assert_called_once_with(body)
+            self.assertEqual(
+                mock_client.return_value.write_points.call_count, 1
+            )
+            self.assertEqual(
+                mock_client.return_value.write_points.call_args,
+                mock.call(body)
+            )
             mock_client.return_value.write_points.reset_mock()
 
     def test_event_listener_no_units(self, mock_client):
@@ -132,13 +148,10 @@ class TestInfluxDB(unittest.TestCase):
                 attrs = {'unit_of_measurement': unit}
             else:
                 attrs = {}
-            state = mock.MagicMock(state=1,
-                                   domain='fake',
-                                   entity_id='entity-id',
-                                   object_id='entity',
-                                   attributes=attrs)
-            event = mock.MagicMock(data={'new_state': state},
-                                   time_fired=12345)
+            state = mock.MagicMock(
+                state=1, domain='fake', entity_id='entity-id',
+                object_id='entity', attributes=attrs)
+            event = mock.MagicMock(data={'new_state': state}, time_fired=12345)
             body = [{
                 'measurement': 'entity-id',
                 'tags': {
@@ -151,20 +164,23 @@ class TestInfluxDB(unittest.TestCase):
                 },
             }]
             self.handler_method(event)
-            mock_client.return_value.write_points.assert_called_once_with(body)
+            self.assertEqual(
+                mock_client.return_value.write_points.call_count, 1
+            )
+            self.assertEqual(
+                mock_client.return_value.write_points.call_args,
+                mock.call(body)
+            )
             mock_client.return_value.write_points.reset_mock()
 
     def test_event_listener_fail_write(self, mock_client):
         """Test the event listener for write failures."""
         self._setup()
 
-        state = mock.MagicMock(state=1,
-                               domain='fake',
-                               entity_id='entity-id',
-                               object_id='entity',
-                               attributes={})
-        event = mock.MagicMock(data={'new_state': state},
-                               time_fired=12345)
+        state = mock.MagicMock(
+            state=1, domain='fake', entity_id='entity-id', object_id='entity',
+            attributes={})
+        event = mock.MagicMock(data={'new_state': state}, time_fired=12345)
         mock_client.return_value.write_points.side_effect = \
             influx_client.exceptions.InfluxDBClientError('foo')
         self.handler_method(event)
@@ -174,13 +190,10 @@ class TestInfluxDB(unittest.TestCase):
         self._setup()
 
         for state_state in (1, 'unknown', '', 'unavailable'):
-            state = mock.MagicMock(state=state_state,
-                                   domain='fake',
-                                   entity_id='entity-id',
-                                   object_id='entity',
-                                   attributes={})
-            event = mock.MagicMock(data={'new_state': state},
-                                   time_fired=12345)
+            state = mock.MagicMock(
+                state=state_state, domain='fake', entity_id='entity-id',
+                object_id='entity', attributes={})
+            event = mock.MagicMock(data={'new_state': state}, time_fired=12345)
             body = [{
                 'measurement': 'entity-id',
                 'tags': {
@@ -194,8 +207,13 @@ class TestInfluxDB(unittest.TestCase):
             }]
             self.handler_method(event)
             if state_state == 1:
-                mock_client.return_value.write_points.assert_called_once_with(
-                    body)
+                self.assertEqual(
+                    mock_client.return_value.write_points.call_count, 1
+                )
+                self.assertEqual(
+                    mock_client.return_value.write_points.call_args,
+                    mock.call(body)
+                )
             else:
                 self.assertFalse(mock_client.return_value.write_points.called)
             mock_client.return_value.write_points.reset_mock()
@@ -205,13 +223,10 @@ class TestInfluxDB(unittest.TestCase):
         self._setup()
 
         for entity_id in ('ok', 'blacklisted'):
-            state = mock.MagicMock(state=1,
-                                   domain='fake',
-                                   entity_id='fake.{}'.format(entity_id),
-                                   object_id=entity_id,
-                                   attributes={})
-            event = mock.MagicMock(data={'new_state': state},
-                                   time_fired=12345)
+            state = mock.MagicMock(
+                state=1, domain='fake', entity_id='fake.{}'.format(entity_id),
+                object_id=entity_id, attributes={})
+            event = mock.MagicMock(data={'new_state': state}, time_fired=12345)
             body = [{
                 'measurement': 'fake.{}'.format(entity_id),
                 'tags': {
@@ -225,8 +240,13 @@ class TestInfluxDB(unittest.TestCase):
             }]
             self.handler_method(event)
             if entity_id == 'ok':
-                mock_client.return_value.write_points.assert_called_once_with(
-                    body)
+                self.assertEqual(
+                    mock_client.return_value.write_points.call_count, 1
+                )
+                self.assertEqual(
+                    mock_client.return_value.write_points.call_args,
+                    mock.call(body)
+                )
             else:
                 self.assertFalse(mock_client.return_value.write_points.called)
             mock_client.return_value.write_points.reset_mock()

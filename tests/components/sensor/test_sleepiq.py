@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 
 import requests_mock
 
-from homeassistant import core as ha
 from homeassistant.components.sensor import sleepiq
 
 from tests.components.test_sleepiq import mock_responses
+from tests.common import get_test_home_assistant
 
 
 class TestSleepIQSensorSetup(unittest.TestCase):
@@ -22,7 +22,7 @@ class TestSleepIQSensorSetup(unittest.TestCase):
 
     def setUp(self):
         """Initialize values for this testcase class."""
-        self.hass = ha.HomeAssistant()
+        self.hass = get_test_home_assistant()
         self.username = 'foo'
         self.password = 'bar'
         self.config = {
@@ -32,7 +32,7 @@ class TestSleepIQSensorSetup(unittest.TestCase):
 
     @requests_mock.Mocker()
     def test_setup(self, mock):
-        """Test for succesfully setting up the SleepIQ platform."""
+        """Test for successfully setting up the SleepIQ platform."""
         mock_responses(mock)
 
         sleepiq.setup_platform(self.hass,

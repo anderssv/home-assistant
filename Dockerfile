@@ -19,9 +19,8 @@ RUN script/build_python_openzwave && \
   ln -sf /usr/src/app/build/python-openzwave/openzwave/config /usr/local/share/python-openzwave/config
 
 COPY requirements_all.txt requirements_all.txt
-# certifi breaks Debian based installs
-RUN pip3 install --no-cache-dir -r requirements_all.txt && pip3 uninstall -y certifi && \
-    pip3 install mysqlclient psycopg2
+RUN pip3 install --no-cache-dir -r requirements_all.txt && \
+    pip3 install mysqlclient psycopg2 uvloop
 
 # Copy source
 COPY . .

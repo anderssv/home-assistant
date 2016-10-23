@@ -100,7 +100,7 @@ class GenericThermostat(ClimateDevice):
         return self._name
 
     @property
-    def unit_of_measurement(self):
+    def temperature_unit(self):
         """Return the unit of measurement."""
         return self._unit
 
@@ -110,7 +110,7 @@ class GenericThermostat(ClimateDevice):
         return self._cur_temp
 
     @property
-    def operation(self):
+    def current_operation(self):
         """Return current operation ie. heat, cool, idle."""
         if self.ac_mode:
             cooling = self._active and self._is_device_active

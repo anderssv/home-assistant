@@ -69,7 +69,7 @@ def setUpModule():   # pylint: disable=invalid-name
         {http.DOMAIN: {http.CONF_API_PASSWORD: API_PASSWORD,
                        http.CONF_SERVER_PORT: SLAVE_PORT}})
 
-    with patch.object(ha, 'create_timer', return_value=None):
+    with patch.object(ha, '_async_create_timer', return_value=None):
         slave.start()
 
 
@@ -163,7 +163,7 @@ class TestRemoteMethods(unittest.TestCase):
     def test_set_state_with_push(self):
         """Test Python API set_state with push option."""
         events = []
-        hass.bus.listen(EVENT_STATE_CHANGED, events.append)
+        hass.bus.listen(EVENT_STATE_CHANGED, lambda ev: events.append(ev))
 
         remote.set_state(master_api, 'test.test', 'set_test_2')
         remote.set_state(master_api, 'test.test', 'set_test_2')

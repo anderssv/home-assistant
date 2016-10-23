@@ -14,7 +14,7 @@ from homeassistant.components.climate import (
     DOMAIN, STATE_COOL, STATE_HEAT, STATE_IDLE, ClimateDevice,
     ATTR_TARGET_TEMP_LOW, ATTR_TARGET_TEMP_HIGH)
 from homeassistant.const import (
-    ATTR_ENTITY_ID, STATE_OFF, STATE_ON, TEMP_FAHRENHEIT, ATTR_TEMPERATURE)
+    ATTR_ENTITY_ID, STATE_OFF, STATE_ON, TEMP_FAHRENHEIT)
 from homeassistant.config import load_yaml_config_file
 import homeassistant.helpers.config_validation as cv
 
@@ -105,7 +105,7 @@ class Thermostat(ClimateDevice):
         return self.thermostat['name']
 
     @property
-    def unit_of_measurement(self):
+    def temperature_unit(self):
         """Return the unit of measurement."""
         return TEMP_FAHRENHEIT
 
@@ -113,15 +113,6 @@ class Thermostat(ClimateDevice):
     def current_temperature(self):
         """Return the current temperature."""
         return self.thermostat['runtime']['actualTemperature'] / 10
-
-    @property
-    def target_temperature(self):
-        """Return the temperature we try to reach."""
-        if (self.operation_mode == 'heat' or
-                self.operation_mode == 'auxHeatOnly'):
-            return self.target_temperature_low
-        elif self.operation_mode == 'cool':
-            return self.target_temperature_high
 
     @property
     def target_temperature_low(self):
@@ -226,10 +217,6 @@ class Thermostat(ClimateDevice):
 
     def set_temperature(self, **kwargs):
         """Set new target temperature."""
-        if kwargs.get(ATTR_TEMPERATURE) is not None:
-            temperature = kwargs.get(ATTR_TEMPERATURE)
-            low_temp = int(temperature)
-            high_temp = int(temperature)
         if kwargs.get(ATTR_TARGET_TEMP_LOW) is not None and \
            kwargs.get(ATTR_TARGET_TEMP_HIGH) is not None:
             high_temp = int(kwargs.get(ATTR_TARGET_TEMP_LOW))

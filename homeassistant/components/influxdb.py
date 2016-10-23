@@ -28,18 +28,18 @@ DEFAULT_PORT = 8086
 DEFAULT_SSL = False
 DEFAULT_VERIFY_SSL = False
 DOMAIN = 'influxdb'
+TIMEOUT = 5
 
 CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
         vol.Optional(CONF_HOST, default=DEFAULT_HOST): cv.string,
-        vol.Required(CONF_USERNAME): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
+        vol.Inclusive(CONF_USERNAME, 'authentication'): cv.string,
+        vol.Inclusive(CONF_PASSWORD, 'authentication'): cv.string,
         vol.Optional(CONF_BLACKLIST, default=[]):
             vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional(CONF_DB_NAME, default=DEFAULT_DATABASE): cv.string,
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Optional(CONF_PORT, default=False): cv.boolean,
-        vol.Optional(CONF_SSL, default=False): cv.boolean,
+        vol.Optional(CONF_SSL, default=DEFAULT_SSL): cv.boolean,
         vol.Optional(CONF_TAGS, default={}):
             vol.Schema({cv.string: cv.string}),
         vol.Optional(CONF_WHITELIST, default=[]):
@@ -70,7 +70,8 @@ def setup(hass, config):
     try:
         influx = InfluxDBClient(
             host=host, port=port, username=username, password=password,
-            database=database, ssl=ssl, verify_ssl=verify_ssl)
+            database=database, ssl=ssl, verify_ssl=verify_ssl,
+            timeout=TIMEOUT)
         influx.query("select * from /.*/ LIMIT 1;")
     except exceptions.InfluxDBClientError as exc:
         _LOGGER.error("Database host is not accessible due to '%s', please "
@@ -111,6 +112,10 @@ def setup(hass, config):
                 }
             }
         ]
+
+        for key, value in state.attributes.items():
+            if key != 'unit_of_measurement':
+                json_body[0]['fields'][key] = value
 
         json_body[0]['tags'].update(tags)
 

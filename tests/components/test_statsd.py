@@ -4,6 +4,7 @@ from unittest import mock
 
 import voluptuous as vol
 
+from homeassistant.bootstrap import setup_component
 import homeassistant.core as ha
 import homeassistant.components.statsd as statsd
 from homeassistant.const import (STATE_ON, STATE_OFF, EVENT_STATE_CHANGED)
@@ -32,16 +33,18 @@ class TestStatsd(unittest.TestCase):
             'statsd': {
                 'host': 'host',
                 'port': 123,
-                'sample_rate': 1,
+                'rate': 1,
                 'prefix': 'foo',
             }
         }
         hass = mock.MagicMock()
-        self.assertTrue(statsd.setup(hass, config))
-        mock_connection.assert_called_once_with(
-            host='host',
-            port=123,
-            prefix='foo')
+        hass.pool.worker_count = 2
+        self.assertTrue(setup_component(hass, statsd.DOMAIN, config))
+        self.assertEqual(mock_connection.call_count, 1)
+        self.assertEqual(
+            mock_connection.call_args,
+            mock.call(host='host', port=123, prefix='foo')
+        )
 
         self.assertTrue(hass.bus.listen.called)
         self.assertEqual(EVENT_STATE_CHANGED,
@@ -60,11 +63,13 @@ class TestStatsd(unittest.TestCase):
         config['statsd'][statsd.CONF_PREFIX] = statsd.DEFAULT_PREFIX
 
         hass = mock.MagicMock()
-        self.assertTrue(statsd.setup(hass, config))
-        mock_connection.assert_called_once_with(
-            host='host',
-            port=8125,
-            prefix='hass')
+        hass.pool.worker_count = 2
+        self.assertTrue(setup_component(hass, statsd.DOMAIN, config))
+        self.assertEqual(mock_connection.call_count, 1)
+        self.assertEqual(
+            mock_connection.call_args,
+            mock.call(host='host', port=8125, prefix='hass')
+        )
         self.assertTrue(hass.bus.listen.called)
 
     @mock.patch('statsd.StatsClient')
@@ -79,7 +84,8 @@ class TestStatsd(unittest.TestCase):
         config['statsd'][statsd.CONF_RATE] = statsd.DEFAULT_RATE
 
         hass = mock.MagicMock()
-        statsd.setup(hass, config)
+        hass.pool.worker_count = 2
+        setup_component(hass, statsd.DOMAIN, config)
         self.assertTrue(hass.bus.listen.called)
         handler_method = hass.bus.listen.call_args_list[0][0][1]
 
@@ -97,15 +103,18 @@ class TestStatsd(unittest.TestCase):
 
             mock_client.return_value.gauge.reset_mock()
 
-            mock_client.return_value.incr.assert_called_once_with(
-                state.entity_id, rate=statsd.DEFAULT_RATE)
+            self.assertEqual(mock_client.return_value.incr.call_count, 1)
+            self.assertEqual(
+                mock_client.return_value.incr.call_args,
+                mock.call(state.entity_id, rate=statsd.DEFAULT_RATE)
+            )
             mock_client.return_value.incr.reset_mock()
 
         for invalid in ('foo', '', object):
             handler_method(mock.MagicMock(data={
                 'new_state': ha.State('domain.test', invalid, {})}))
             self.assertFalse(mock_client.return_value.gauge.called)
-            self.assertFalse(mock_client.return_value.incr.called)
+            self.assertTrue(mock_client.return_value.incr.called)
 
     @mock.patch('statsd.StatsClient')
     def test_event_listener_attr_details(self, mock_client):
@@ -120,7 +129,8 @@ class TestStatsd(unittest.TestCase):
         config['statsd'][statsd.CONF_RATE] = statsd.DEFAULT_RATE
 
         hass = mock.MagicMock()
-        statsd.setup(hass, config)
+        hass.pool.worker_count = 2
+        setup_component(hass, statsd.DOMAIN, config)
         self.assertTrue(hass.bus.listen.called)
         handler_method = hass.bus.listen.call_args_list[0][0][1]
 
@@ -141,12 +151,15 @@ class TestStatsd(unittest.TestCase):
 
             mock_client.return_value.gauge.reset_mock()
 
-            mock_client.return_value.incr.assert_called_once_with(
-                state.entity_id, rate=statsd.DEFAULT_RATE)
+            self.assertEqual(mock_client.return_value.incr.call_count, 1)
+            self.assertEqual(
+                mock_client.return_value.incr.call_args,
+                mock.call(state.entity_id, rate=statsd.DEFAULT_RATE)
+            )
             mock_client.return_value.incr.reset_mock()
 
         for invalid in ('foo', '', object):
             handler_method(mock.MagicMock(data={
                 'new_state': ha.State('domain.test', invalid, {})}))
             self.assertFalse(mock_client.return_value.gauge.called)
-            self.assertFalse(mock_client.return_value.incr.called)
+            self.assertTrue(mock_client.return_value.incr.called)

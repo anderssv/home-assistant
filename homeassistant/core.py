@@ -8,7 +8,6 @@ of entities and react to changes.
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import enum
-import functools as ft
 import logging
 import os
 import re
@@ -40,6 +39,12 @@ import homeassistant.util.dt as dt_util
 import homeassistant.util.location as location
 from homeassistant.util.unit_system import UnitSystem, METRIC_SYSTEM  # NOQA
 
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ImportError:
+    pass
+
 DOMAIN = "homeassistant"
 
 # How often time_changed event should fire
@@ -56,6 +61,9 @@ MIN_WORKER_THREAD = 2
 # Pattern for validating entity IDs (format: <domain>.<entity>)
 ENTITY_ID_PATTERN = re.compile(r"^(\w+)\.(\w+)$")
 
+# Interval at which we check if the pool is getting busy
+MONITOR_POOL_INTERVAL = 30
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -67,6 +75,18 @@ def split_entity_id(entity_id: str) -> List[str]:
 def valid_entity_id(entity_id: str) -> bool:
     """Test if an entity ID is a valid format."""
     return ENTITY_ID_PATTERN.match(entity_id) is not None
+
+
+def callback(func: Callable[..., None]) -> Callable[..., None]:
+    """Annotation to mark method as safe to call from within the event loop."""
+    # pylint: disable=protected-access
+    func._hass_callback = True
+    return func
+
+
+def is_callback(func: Callable[..., Any]) -> bool:
+    """Check if function is safe to be called in the event loop."""
+    return '_hass_callback' in func.__dict__
 
 
 class CoreState(enum.Enum):
@@ -113,10 +133,11 @@ class HomeAssistant(object):
     def __init__(self, loop=None):
         """Initialize new Home Assistant object."""
         self.loop = loop or asyncio.get_event_loop()
-        self.executer = ThreadPoolExecutor(max_workers=5)
-        self.loop.set_default_executor(self.executer)
-        self.pool = pool = create_worker_pool()
-        self.bus = EventBus(pool, self.loop)
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.loop.set_default_executor(self.executor)
+        self.loop.set_exception_handler(self._async_exception_handler)
+        self.pool = create_worker_pool()
+        self.bus = EventBus(self)
         self.services = ServiceRegistry(self.bus, self.add_job, self.loop)
         self.states = StateMachine(self.bus, self.loop)
         self.config = Config()  # type: Config
@@ -137,17 +158,17 @@ class HomeAssistant(object):
         # Register the async start
         self.loop.create_task(self.async_start())
 
-        @asyncio.coroutine
+        @callback
         def stop_homeassistant(*args):
             """Stop Home Assistant."""
             self.exit_code = 0
-            yield from self.async_stop()
+            self.async_add_job(self.async_stop)
 
-        @asyncio.coroutine
+        @callback
         def restart_homeassistant(*args):
             """Restart Home Assistant."""
             self.exit_code = RESTART_EXIT_CODE
-            yield from self.async_stop()
+            self.async_add_job(self.async_stop)
 
         # Register the restart/stop event
         self.loop.call_soon(
@@ -160,18 +181,22 @@ class HomeAssistant(object):
         )
 
         # Setup signal handling
-        try:
-            signal.signal(signal.SIGTERM, stop_homeassistant)
-        except ValueError:
-            _LOGGER.warning(
-                'Could not bind to SIGTERM. Are you running in a thread?')
-        try:
-            signal.signal(signal.SIGHUP, restart_homeassistant)
-        except ValueError:
-            _LOGGER.warning(
-                'Could not bind to SIGHUP. Are you running in a thread?')
-        except AttributeError:
-            pass
+        if sys.platform != 'win32':
+            try:
+                self.loop.add_signal_handler(
+                    signal.SIGTERM,
+                    stop_homeassistant
+                )
+            except ValueError:
+                _LOGGER.warning('Could not bind to SIGTERM.')
+
+            try:
+                self.loop.add_signal_handler(
+                    signal.SIGHUP,
+                    restart_homeassistant
+                )
+            except ValueError:
+                _LOGGER.warning('Could not bind to SIGHUP.')
 
         # Run forever and catch keyboard interrupt
         try:
@@ -179,10 +204,10 @@ class HomeAssistant(object):
             _LOGGER.info("Starting Home Assistant core loop")
             self.loop.run_forever()
         except KeyboardInterrupt:
-            pass
-        finally:
-            self.loop.create_task(stop_homeassistant())
+            self.loop.call_soon(stop_homeassistant)
             self.loop.run_forever()
+        finally:
+            self.loop.close()
 
     @asyncio.coroutine
     def async_start(self):
@@ -190,7 +215,10 @@ class HomeAssistant(object):
 
         This method is a coroutine.
         """
-        create_timer(self)
+        # pylint: disable=protected-access
+        self.loop._thread_ident = threading.get_ident()
+        _async_create_timer(self)
+        _async_monitor_worker_pool(self)
         self.bus.async_fire(EVENT_HOMEASSISTANT_START)
         yield from self.loop.run_in_executor(None, self.pool.block_till_done)
         self.state = CoreState.running
@@ -206,16 +234,35 @@ class HomeAssistant(object):
         """
         self.pool.add_job(priority, (target,) + args)
 
+    @callback
     def async_add_job(self, target: Callable[..., None], *args: Any):
         """Add a job from within the eventloop.
+
+        This method must be run in the event loop.
 
         target: target to call.
         args: parameters for method to call.
         """
-        if asyncio.iscoroutinefunction(target):
+        if is_callback(target):
+            self.loop.call_soon(target, *args)
+        elif asyncio.iscoroutinefunction(target):
             self.loop.create_task(target(*args))
         else:
             self.add_job(target, *args)
+
+    @callback
+    def async_run_job(self, target: Callable[..., None], *args: Any):
+        """Run a job from within the event loop.
+
+        This method must be run in the event loop.
+
+        target: target to call.
+        args: parameters for method to call.
+        """
+        if is_callback(target):
+            target(*args)
+        else:
+            self.async_add_job(target, *args)
 
     def _loop_empty(self):
         """Python 3.4.2 empty loop compatibility function."""
@@ -238,12 +285,16 @@ class HomeAssistant(object):
 
         def notify_when_done():
             """Notify event loop when pool done."""
+            count = 0
             while True:
                 # Wait for the work queue to empty
                 self.pool.block_till_done()
 
                 # Verify the loop is empty
                 if self._loop_empty():
+                    count += 1
+
+                if count == 2:
                     break
 
                 # sleep in the loop executor, this forces execution back into
@@ -273,9 +324,28 @@ class HomeAssistant(object):
         self.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
         yield from self.loop.run_in_executor(None, self.pool.block_till_done)
         yield from self.loop.run_in_executor(None, self.pool.stop)
-        self.executer.shutdown()
+        self.executor.shutdown()
         self.state = CoreState.not_running
         self.loop.stop()
+
+    # pylint: disable=no-self-use
+    def _async_exception_handler(self, loop, context):
+        """Handle all exception inside the core loop."""
+        message = context.get('message')
+        if message:
+            _LOGGER.warning(
+                "Error inside async loop: %s",
+                message
+            )
+
+        # for debug modus
+        exception = context.get('exception')
+        if exception is not None:
+            exc_info = (type(exception), exception, exception.__traceback__)
+            _LOGGER.debug(
+                "Exception inside async loop: ",
+                exc_info=exc_info
+            )
 
 
 class EventOrigin(enum.Enum):
@@ -304,7 +374,10 @@ class Event(object):
         self.time_fired = time_fired or dt_util.utcnow()
 
     def as_dict(self):
-        """Create a dict representation of this Event."""
+        """Create a dict representation of this Event.
+
+        Async friendly.
+        """
         return {
             'event_type': self.event_type,
             'data': dict(self.data),
@@ -335,13 +408,12 @@ class Event(object):
 class EventBus(object):
     """Allows firing of and listening for events."""
 
-    def __init__(self, pool: util.ThreadPool,
-                 loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         """Initialize a new event bus."""
         self._listeners = {}
-        self._pool = pool
-        self._loop = loop
+        self._hass = hass
 
+    @callback
     def async_listeners(self):
         """Dict with events and the number of listeners.
 
@@ -354,24 +426,25 @@ class EventBus(object):
     def listeners(self):
         """Dict with events and the number of listeners."""
         return run_callback_threadsafe(
-            self._loop, self.async_listeners
+            self._hass.loop, self.async_listeners
         ).result()
 
     def fire(self, event_type: str, event_data=None, origin=EventOrigin.local):
         """Fire an event."""
-        if not self._pool.running:
-            raise HomeAssistantError('Home Assistant has shut down.')
+        self._hass.loop.call_soon_threadsafe(self.async_fire, event_type,
+                                             event_data, origin)
 
-        self._loop.call_soon_threadsafe(self.async_fire, event_type,
-                                        event_data, origin)
-        return
-
+    @callback
     def async_fire(self, event_type: str, event_data=None,
                    origin=EventOrigin.local, wait=False):
         """Fire an event.
 
         This method must be run in the event loop.
         """
+        if event_type != EVENT_HOMEASSISTANT_STOP and \
+                self._hass.state == CoreState.stopping:
+            raise HomeAssistantError('Home Assistant is shutting down.')
+
         # Copy the list of the current listeners because some listeners
         # remove themselves as a listener while being executed which
         # causes the iterator to be confused.
@@ -386,18 +459,8 @@ class EventBus(object):
         if not listeners:
             return
 
-        job_priority = JobPriority.from_event_type(event_type)
-
-        sync_jobs = []
         for func in listeners:
-            if asyncio.iscoroutinefunction(func):
-                self._loop.create_task(func(event))
-            else:
-                sync_jobs.append((job_priority, (func, event)))
-
-        # Send all the sync jobs at once
-        if sync_jobs:
-            self._pool.add_many_jobs(sync_jobs)
+            self._hass.async_add_job(func, event)
 
     def listen(self, event_type, listener):
         """Listen for all events or events of a specific type.
@@ -405,16 +468,17 @@ class EventBus(object):
         To listen to all events specify the constant ``MATCH_ALL``
         as event_type.
         """
-        future = run_callback_threadsafe(
-            self._loop, self.async_listen, event_type, listener)
-        future.result()
+        async_remove_listener = run_callback_threadsafe(
+            self._hass.loop, self.async_listen, event_type, listener).result()
 
         def remove_listener():
             """Remove the listener."""
-            self._remove_listener(event_type, listener)
+            run_callback_threadsafe(
+                self._hass.loop, async_remove_listener).result()
 
         return remove_listener
 
+    @callback
     def async_listen(self, event_type, listener):
         """Listen for all events or events of a specific type.
 
@@ -430,7 +494,7 @@ class EventBus(object):
 
         def remove_listener():
             """Remove the listener."""
-            self.async_remove_listener(event_type, listener)
+            self._async_remove_listener(event_type, listener)
 
         return remove_listener
 
@@ -442,26 +506,18 @@ class EventBus(object):
 
         Returns function to unsubscribe the listener.
         """
-        @ft.wraps(listener)
-        def onetime_listener(event):
-            """Remove listener from eventbus and then fire listener."""
-            if hasattr(onetime_listener, 'run'):
-                return
-            # Set variable so that we will never run twice.
-            # Because the event bus might have to wait till a thread comes
-            # available to execute this listener it might occur that the
-            # listener gets lined up twice to be executed.
-            # This will make sure the second time it does nothing.
-            setattr(onetime_listener, 'run', True)
+        async_remove_listener = run_callback_threadsafe(
+            self._hass.loop, self.async_listen_once, event_type, listener,
+        ).result()
 
-            remove_listener()
-
-            listener(event)
-
-        remove_listener = self.listen(event_type, onetime_listener)
+        def remove_listener():
+            """Remove the listener."""
+            run_callback_threadsafe(
+                self._hass.loop, async_remove_listener).result()
 
         return remove_listener
 
+    @callback
     def async_listen_once(self, event_type, listener):
         """Listen once for event of a specific type.
 
@@ -472,8 +528,7 @@ class EventBus(object):
 
         This method must be run in the event loop.
         """
-        @ft.wraps(listener)
-        @asyncio.coroutine
+        @callback
         def onetime_listener(event):
             """Remove listener from eventbus and then fire listener."""
             if hasattr(onetime_listener, 'run'):
@@ -484,34 +539,14 @@ class EventBus(object):
             # multiple times as well.
             # This will make sure the second time it does nothing.
             setattr(onetime_listener, 'run', True)
+            self._async_remove_listener(event_type, onetime_listener)
 
-            self.async_remove_listener(event_type, onetime_listener)
+            self._hass.async_run_job(listener, event)
 
-            if asyncio.iscoroutinefunction(listener):
-                yield from listener(event)
-            else:
-                job_priority = JobPriority.from_event_type(event.event_type)
-                self._pool.add_job(job_priority, (listener, event))
+        return self.async_listen(event_type, onetime_listener)
 
-        self.async_listen(event_type, onetime_listener)
-
-        return onetime_listener
-
-    def remove_listener(self, event_type, listener):
-        """Remove a listener of a specific event_type. (DEPRECATED 0.28)."""
-        _LOGGER.warning('bus.remove_listener has been deprecated. Please use '
-                        'the function returned from calling listen.')
-        self._remove_listener(event_type, listener)
-
-    def _remove_listener(self, event_type, listener):
-        """Remove a listener of a specific event_type."""
-        future = run_callback_threadsafe(
-            self._loop,
-            self.async_remove_listener, event_type, listener
-        )
-        future.result()
-
-    def async_remove_listener(self, event_type, listener):
+    @callback
+    def _async_remove_listener(self, event_type, listener):
         """Remove a listener of a specific event_type.
 
         This method must be run in the event loop.
@@ -578,6 +613,8 @@ class State(object):
     def as_dict(self):
         """Return a dict representation of the State.
 
+        Async friendly.
+
         To be used for JSON serialization.
         Ensures: state == State.from_dict(state.as_dict())
         """
@@ -590,6 +627,8 @@ class State(object):
     @classmethod
     def from_dict(cls, json_dict):
         """Initialize a state from a dict.
+
+        Async friendly.
 
         Ensures: state == State.from_json_dict(state.to_json_dict())
         """
@@ -643,8 +682,12 @@ class StateMachine(object):
         )
         return future.result()
 
+    @callback
     def async_entity_ids(self, domain_filter=None):
-        """List of entity ids that are being tracked."""
+        """List of entity ids that are being tracked.
+
+        This method must be run in the event loop.
+        """
         if domain_filter is None:
             return list(self._states.keys())
 
@@ -657,6 +700,7 @@ class StateMachine(object):
         """Create a list of all states."""
         return run_callback_threadsafe(self._loop, self.async_all).result()
 
+    @callback
     def async_all(self):
         """Create a list of all states.
 
@@ -665,40 +709,29 @@ class StateMachine(object):
         return list(self._states.values())
 
     def get(self, entity_id):
-        """Retrieve state of entity_id or None if not found."""
+        """Retrieve state of entity_id or None if not found.
+
+        Async friendly.
+        """
         return self._states.get(entity_id.lower())
 
     def is_state(self, entity_id, state):
-        """Test if entity exists and is specified state."""
-        return run_callback_threadsafe(
-            self._loop, self.async_is_state, entity_id, state
-        ).result()
-
-    def async_is_state(self, entity_id, state):
         """Test if entity exists and is specified state.
 
-        This method must be run in the event loop.
+        Async friendly.
         """
-        entity_id = entity_id.lower()
+        state_obj = self.get(entity_id)
 
-        return (entity_id in self._states and
-                self._states[entity_id].state == state)
+        return state_obj and state_obj.state == state
 
     def is_state_attr(self, entity_id, name, value):
-        """Test if entity exists and has a state attribute set to value."""
-        return run_callback_threadsafe(
-            self._loop, self.async_is_state_attr, entity_id, name, value
-        ).result()
-
-    def async_is_state_attr(self, entity_id, name, value):
         """Test if entity exists and has a state attribute set to value.
 
-        This method must be run in the event loop.
+        Async friendly.
         """
-        entity_id = entity_id.lower()
+        state_obj = self.get(entity_id)
 
-        return (entity_id in self._states and
-                self._states[entity_id].attributes.get(name, None) == value)
+        return state_obj and state_obj.attributes.get(name, None) == value
 
     def remove(self, entity_id):
         """Remove the state of an entity.
@@ -708,6 +741,7 @@ class StateMachine(object):
         return run_callback_threadsafe(
             self._loop, self.async_remove, entity_id).result()
 
+    @callback
     def async_remove(self, entity_id):
         """Remove the state of an entity.
 
@@ -745,6 +779,7 @@ class StateMachine(object):
             self.async_set, entity_id, new_state, attributes, force_update,
         ).result()
 
+    @callback
     def async_set(self, entity_id, new_state, attributes=None,
                   force_update=False):
         """Set the state of an entity, add entity if it does not exist.
@@ -789,7 +824,8 @@ class StateMachine(object):
 class Service(object):
     """Represents a callable service."""
 
-    __slots__ = ['func', 'description', 'fields', 'schema']
+    __slots__ = ['func', 'description', 'fields', 'schema',
+                 'is_callback', 'is_coroutinefunction']
 
     def __init__(self, func, description, fields, schema):
         """Initialize a service."""
@@ -797,6 +833,8 @@ class Service(object):
         self.description = description or ''
         self.fields = fields or {}
         self.schema = schema
+        self.is_callback = is_callback(func)
+        self.is_coroutinefunction = asyncio.iscoroutinefunction(func)
 
     def as_dict(self):
         """Return dictionary representation of this service."""
@@ -804,19 +842,6 @@ class Service(object):
             'description': self.description,
             'fields': self.fields,
         }
-
-    def __call__(self, call):
-        """Execute the service."""
-        try:
-            if self.schema:
-                call.data = self.schema(call.data)
-            call.data = MappingProxyType(call.data)
-
-            self.func(call)
-        except vol.MultipleInvalid as ex:
-            _LOGGER.error('Invalid service data for %s.%s: %s',
-                          call.domain, call.service,
-                          humanize_error(call.data, ex))
 
 
 # pylint: disable=too-few-public-methods
@@ -829,7 +854,7 @@ class ServiceCall(object):
         """Initialize a service call."""
         self.domain = domain.lower()
         self.service = service.lower()
-        self.data = data or {}
+        self.data = MappingProxyType(data or {})
         self.call_id = call_id
 
     def __repr__(self):
@@ -863,14 +888,21 @@ class ServiceRegistry(object):
             self._loop, self.async_services,
         ).result()
 
+    @callback
     def async_services(self):
-        """Dict with per domain a list of available services."""
+        """Dict with per domain a list of available services.
+
+        This method must be run in the event loop.
+        """
         return {domain: {key: value.as_dict() for key, value
                          in self._services[domain].items()}
                 for domain in self._services}
 
     def has_service(self, domain, service):
-        """Test if specified service exists."""
+        """Test if specified service exists.
+
+        Async friendly.
+        """
         return service.lower() in self._services.get(domain.lower(), [])
 
     # pylint: disable=too-many-arguments
@@ -890,6 +922,7 @@ class ServiceRegistry(object):
             schema
         ).result()
 
+    @callback
     def async_register(self, domain, service, service_func, description=None,
                        schema=None):
         """
@@ -972,10 +1005,10 @@ class ServiceRegistry(object):
         if blocking:
             fut = asyncio.Future(loop=self._loop)
 
-            @asyncio.coroutine
-            def service_executed(call):
+            @callback
+            def service_executed(event):
                 """Callback method that is called when service is executed."""
-                if call.data[ATTR_SERVICE_CALL_ID] == call_id:
+                if event.data[ATTR_SERVICE_CALL_ID] == call_id:
                     fut.set_result(True)
 
             unsub = self._bus.async_listen(EVENT_SERVICE_EXECUTED,
@@ -990,9 +1023,10 @@ class ServiceRegistry(object):
             unsub()
             return success
 
+    @asyncio.coroutine
     def _event_to_service_call(self, event):
         """Callback for SERVICE_CALLED events from the event bus."""
-        service_data = event.data.get(ATTR_SERVICE_DATA)
+        service_data = event.data.get(ATTR_SERVICE_DATA) or {}
         domain = event.data.get(ATTR_DOMAIN).lower()
         service = event.data.get(ATTR_SERVICE).lower()
         call_id = event.data.get(ATTR_SERVICE_CALL_ID)
@@ -1004,19 +1038,44 @@ class ServiceRegistry(object):
             return
 
         service_handler = self._services[domain][service]
+
+        def fire_service_executed():
+            """Fire service executed event."""
+            if not call_id:
+                return
+
+            data = {ATTR_SERVICE_CALL_ID: call_id}
+
+            if (service_handler.is_coroutinefunction or
+                    service_handler.is_callback):
+                self._bus.async_fire(EVENT_SERVICE_EXECUTED, data)
+            else:
+                self._bus.fire(EVENT_SERVICE_EXECUTED, data)
+
+        try:
+            if service_handler.schema:
+                service_data = service_handler.schema(service_data)
+        except vol.Invalid as ex:
+            _LOGGER.error('Invalid service data for %s.%s: %s',
+                          domain, service, humanize_error(service_data, ex))
+            fire_service_executed()
+            return
+
         service_call = ServiceCall(domain, service, service_data, call_id)
 
-        # Add a job to the pool that calls _execute_service
-        self._add_job(self._execute_service, service_handler, service_call,
-                      priority=JobPriority.EVENT_SERVICE)
+        if service_handler.is_callback:
+            service_handler.func(service_call)
+            fire_service_executed()
+        elif service_handler.is_coroutinefunction:
+            yield from service_handler.func(service_call)
+            fire_service_executed()
+        else:
+            def execute_service():
+                """Execute a service and fires a SERVICE_EXECUTED event."""
+                service_handler.func(service_call)
+                fire_service_executed()
 
-    def _execute_service(self, service, call):
-        """Execute a service and fires a SERVICE_EXECUTED event."""
-        service(call)
-
-        if call.call_id is not None:
-            self._bus.fire(
-                EVENT_SERVICE_EXECUTED, {ATTR_SERVICE_CALL_ID: call.call_id})
+            self._add_job(execute_service, priority=JobPriority.EVENT_SERVICE)
 
     def _generate_unique_id(self):
         """Generate a unique service call id."""
@@ -1050,18 +1109,27 @@ class Config(object):
         self.config_dir = None
 
     def distance(self: object, lat: float, lon: float) -> float:
-        """Calculate distance from Home Assistant."""
+        """Calculate distance from Home Assistant.
+
+        Async friendly.
+        """
         return self.units.length(
             location.distance(self.latitude, self.longitude, lat, lon), 'm')
 
     def path(self, *path):
-        """Generate path to the file within the config dir."""
+        """Generate path to the file within the config dir.
+
+        Async friendly.
+        """
         if self.config_dir is None:
             raise HomeAssistantError("config_dir is not set")
         return os.path.join(self.config_dir, *path)
 
     def as_dict(self):
-        """Create a dict representation of this dict."""
+        """Create a dict representation of this dict.
+
+        Async friendly.
+        """
         time_zone = self.time_zone or dt_util.UTC
 
         return {
@@ -1071,21 +1139,17 @@ class Config(object):
             'location_name': self.location_name,
             'time_zone': time_zone.zone,
             'components': self.components,
+            'config_dir': self.config_dir,
             'version': __version__
         }
 
 
-def create_timer(hass, interval=TIMER_INTERVAL):
+def _async_create_timer(hass, interval=TIMER_INTERVAL):
     """Create a timer that will start on HOMEASSISTANT_START."""
-    # We want to be able to fire every time a minute starts (seconds=0).
-    # We want this so other modules can use that to make sure they fire
-    # every minute.
-    assert 60 % interval == 0, "60 % TIMER_INTERVAL should be 0!"
-
     stop_event = asyncio.Event(loop=hass.loop)
 
     # Setting the Event inside the loop by marking it as a coroutine
-    @asyncio.coroutine
+    @callback
     def stop_timer(event):
         """Stop the timer."""
         stop_event.set()
@@ -1160,14 +1224,48 @@ def create_worker_pool(worker_count=None):
             # We do not want to crash our ThreadPool
             _LOGGER.exception("BusHandler:Exception doing job")
 
-    def busy_callback(worker_count, current_jobs, pending_jobs_count):
-        """Callback to be called when the pool queue gets too big."""
+    return util.ThreadPool(job_handler, worker_count)
+
+
+def _async_monitor_worker_pool(hass):
+    """Create a monitor for the thread pool to check if pool is misbehaving."""
+    busy_threshold = hass.pool.worker_count * 3
+
+    handle = None
+
+    def schedule():
+        """Schedule the monitor."""
+        nonlocal handle
+        handle = hass.loop.call_later(MONITOR_POOL_INTERVAL,
+                                      check_pool_threshold)
+
+    def check_pool_threshold():
+        """Check pool size."""
+        nonlocal busy_threshold
+
+        pending_jobs = hass.pool.queue_size
+
+        if pending_jobs < busy_threshold:
+            schedule()
+            return
+
         _LOGGER.warning(
             "WorkerPool:All %d threads are busy and %d jobs pending",
-            worker_count, pending_jobs_count)
+            hass.pool.worker_count, pending_jobs)
 
-        for start, job in current_jobs:
-            _LOGGER.warning("WorkerPool:Current job from %s: %s",
+        for start, job in hass.pool.current_jobs:
+            _LOGGER.warning("WorkerPool:Current job started at %s: %s",
                             dt_util.as_local(start).isoformat(), job)
 
-    return util.ThreadPool(job_handler, worker_count, busy_callback)
+        busy_threshold *= 2
+
+        schedule()
+
+    schedule()
+
+    @callback
+    def stop_monitor(event):
+        """Stop the monitor."""
+        handle.cancel()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop_monitor)

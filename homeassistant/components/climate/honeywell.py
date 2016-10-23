@@ -16,7 +16,7 @@ from homeassistant.const import (
 import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = ['evohomeclient==0.2.5',
-                'somecomfort==0.2.1']
+                'somecomfort==0.3.2']
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class RoundThermostat(ClimateDevice):
         return self._name
 
     @property
-    def unit_of_measurement(self):
+    def temperature_unit(self):
         """Return the unit of measurement."""
         return TEMP_CELSIUS
 
@@ -217,7 +217,7 @@ class HoneywellUSThermostat(ClimateDevice):
         return self._device.name
 
     @property
-    def unit_of_measurement(self):
+    def temperature_unit(self):
         """Return the unit of measurement."""
         return (TEMP_CELSIUS if self._device.temperature_unit == 'C'
                 else TEMP_FAHRENHEIT)
