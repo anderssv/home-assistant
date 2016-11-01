@@ -169,6 +169,9 @@ class PioneerDevice(MediaPlayerDevice):
     @property
     def source(self):
         """Return the current input source."""
+        if not self._selected_source:
+            return "UNKNOWN"
+
         return self._source_resolve(self._selected_source[2:])
 
     @staticmethod
