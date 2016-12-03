@@ -12,7 +12,7 @@ from homeassistant.const import (
     CONF_HOST, CONF_PASSWORD, CONF_USERNAME, TEMP_FAHRENHEIT, ATTR_TEMPERATURE)
 import homeassistant.helpers.config_validation as cv
 
-REQUIREMENTS = ['proliphix==0.4.0']
+REQUIREMENTS = ['proliphix==0.4.1']
 
 ATTR_FAN = 'fan'
 
@@ -36,7 +36,6 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     add_devices([ProliphixThermostat(pdp)])
 
 
-# pylint: disable=abstract-method
 class ProliphixThermostat(ClimateDevice):
     """Representation a Proliphix thermostat."""
 

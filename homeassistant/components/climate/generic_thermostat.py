@@ -62,11 +62,9 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         target_temp, ac_mode, min_cycle_duration)])
 
 
-# pylint: disable=too-many-instance-attributes, abstract-method
 class GenericThermostat(ClimateDevice):
     """Representation of a GenericThermostat device."""
 
-    # pylint: disable=too-many-arguments
     def __init__(self, hass, name, heater_entity_id, sensor_entity_id,
                  min_temp, max_temp, target_temp, ac_mode, min_cycle_duration):
         """Initialize the thermostat."""
@@ -147,7 +145,7 @@ class GenericThermostat(ClimateDevice):
     def max_temp(self):
         """Return the maximum temperature."""
         # pylint: disable=no-member
-        if self._min_temp:
+        if self._max_temp:
             return self._max_temp
         else:
             # Get default temp from super class
@@ -160,7 +158,7 @@ class GenericThermostat(ClimateDevice):
 
         self._update_temp(new_state)
         self._control_heating()
-        self.update_ha_state()
+        self.schedule_update_ha_state()
 
     def _update_temp(self, state):
         """Update thermostat with latest state from sensor."""

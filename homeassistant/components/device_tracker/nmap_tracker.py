@@ -2,7 +2,7 @@
 Support for scanning a network with nmap.
 
 For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/device_tracker.nmap_scanner/
+https://home-assistant.io/components/device_tracker.nmap_tracker/
 """
 import logging
 import re
@@ -18,16 +18,16 @@ from homeassistant.components.device_tracker import DOMAIN, PLATFORM_SCHEMA
 from homeassistant.const import CONF_HOSTS
 from homeassistant.util import Throttle
 
-# Return cached results if last scan was less then this time ago
-MIN_TIME_BETWEEN_SCANS = timedelta(seconds=5)
+REQUIREMENTS = ['python-nmap==0.6.1']
 
 _LOGGER = logging.getLogger(__name__)
 
+CONF_EXCLUDE = 'exclude'
 # Interval in minutes to exclude devices from a scan while they are home
 CONF_HOME_INTERVAL = 'home_interval'
-CONF_EXCLUDE = 'exclude'
 
-REQUIREMENTS = ['python-nmap==0.6.1']
+MIN_TIME_BETWEEN_SCANS = timedelta(seconds=5)
+
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_HOSTS): cv.ensure_list,
@@ -42,6 +42,7 @@ def get_scanner(hass, config):
     scanner = NmapDeviceScanner(config[DOMAIN])
 
     return scanner if scanner.success_init else None
+
 
 Device = namedtuple('Device', ['mac', 'name', 'ip', 'last_update'])
 
@@ -73,7 +74,7 @@ class NmapDeviceScanner(object):
         self.home_interval = timedelta(minutes=minutes)
 
         self.success_init = self._update_info()
-        _LOGGER.info('nmap scanner initialized')
+        _LOGGER.info("nmap scanner initialized")
 
     def scan_devices(self):
         """Scan for new devices and return a list with found device IDs."""
@@ -97,7 +98,7 @@ class NmapDeviceScanner(object):
 
         Returns boolean if scanning successful.
         """
-        _LOGGER.info('Scanning')
+        _LOGGER.info("Scanning...")
 
         from nmap import PortScanner, PortScannerError
         scanner = PortScanner()
@@ -138,5 +139,5 @@ class NmapDeviceScanner(object):
 
         self.last_results = last_results
 
-        _LOGGER.info('nmap scan successful')
+        _LOGGER.info("nmap scan successful")
         return True

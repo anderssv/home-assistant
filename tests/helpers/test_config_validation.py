@@ -300,6 +300,18 @@ def test_temperature_unit():
     schema('F')
 
 
+def test_x10_address():
+    """Test x10 addr validator."""
+    schema = vol.Schema(cv.x10_address)
+    with pytest.raises(vol.Invalid):
+        schema('Q1')
+        schema('q55')
+        schema('garbage_addr')
+
+    schema('a1')
+    schema('C11')
+
+
 def test_template():
     """Test template validator."""
     schema = vol.Schema(cv.template)
@@ -329,7 +341,7 @@ def test_template_complex():
         1, 'Hello',
         '{{ beer }}',
         '{% if 1 == 1 %}Hello{% else %}World{% endif %}',
-        {'test': 1, 'test': '{{ beer }}'},
+        {'test': 1, 'test2': '{{ beer }}'},
         ['{{ beer }}', 1]
     ):
         schema(value)

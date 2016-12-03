@@ -2,7 +2,7 @@
 iOS push notification platform for notify component.
 
 For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/notify.ios/
+https://home-assistant.io/ecosystem/ios/notifications/
 """
 import logging
 from datetime import datetime, timezone
@@ -23,16 +23,38 @@ PUSH_URL = "https://ios-push.home-assistant.io/push"
 DEPENDENCIES = ["ios"]
 
 
+# pylint: disable=invalid-name
+def log_rate_limits(target, resp, level=20):
+    """Output rate limit log line at given level."""
+    rate_limits = resp["rateLimits"]
+    resetsAt = dt_util.parse_datetime(rate_limits["resetsAt"])
+    resetsAtTime = resetsAt - datetime.now(timezone.utc)
+    rate_limit_msg = ("iOS push notification rate limits for %s: "
+                      "%d sent, %d allowed, %d errors, "
+                      "resets in %s")
+    _LOGGER.log(level, rate_limit_msg,
+                ios.device_name_for_push_id(target),
+                rate_limits["successful"],
+                rate_limits["maximum"], rate_limits["errors"],
+                str(resetsAtTime).split(".")[0])
+
+
 def get_service(hass, config):
     """Get the iOS notification service."""
     if "notify.ios" not in hass.config.components:
         # Need this to enable requirements checking in the app.
         hass.config.components.append("notify.ios")
 
+    if not ios.devices_with_push():
+        _LOGGER.error(("The notify.ios platform was loaded but no "
+                       "devices exist! Please check the documentation at "
+                       "https://home-assistant.io/ecosystem/ios/notifications"
+                       "/ for more information"))
+        return None
+
     return iOSNotificationService()
 
 
-# pylint: disable=too-few-public-methods, too-many-arguments, invalid-name
 class iOSNotificationService(BaseNotificationService):
     """Implement the notification service for iOS."""
 
@@ -66,22 +88,17 @@ class iOSNotificationService(BaseNotificationService):
 
             req = requests.post(PUSH_URL, json=data, timeout=10)
 
-            if req.status_code is not 201:
-                message = req.json()["message"]
-                if req.status_code is 429:
+            if req.status_code != 201:
+                fallback_error = req.json().get("errorMessage",
+                                                "Unknown error")
+                fallback_message = ("Internal server error, "
+                                    "please try again later: "
+                                    "{}").format(fallback_error)
+                message = req.json().get("message", fallback_message)
+                if req.status_code == 429:
                     _LOGGER.warning(message)
-                elif req.status_code is 400 or 500:
+                    log_rate_limits(target, req.json(), 30)
+                else:
                     _LOGGER.error(message)
-
-            if req.status_code in (201, 429):
-                rate_limits = req.json()["rateLimits"]
-                resetsAt = dt_util.parse_datetime(rate_limits["resetsAt"])
-                resetsAtTime = resetsAt - datetime.now(timezone.utc)
-                rate_limit_msg = ("iOS push notification rate limits for %s: "
-                                  "%d sent, %d allowed, %d errors, "
-                                  "resets in %s")
-                _LOGGER.info(rate_limit_msg,
-                             ios.device_name_for_push_id(target),
-                             rate_limits["successful"],
-                             rate_limits["maximum"], rate_limits["errors"],
-                             str(resetsAtTime).split(".")[0])
+            else:
+                log_rate_limits(target, req.json())

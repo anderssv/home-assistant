@@ -94,6 +94,7 @@ def valid_sensor(value):
 def _valid_light_switch(value):
     return _valid_device(value, "light_switch")
 
+
 DEVICE_SCHEMA = vol.Schema({
     vol.Required(ATTR_NAME): cv.string,
     vol.Optional(ATTR_FIREEVENT, default=False): cv.boolean,
@@ -279,7 +280,6 @@ class RfxtrxDevice(Entity):
     """Represents a Rfxtrx device.
 
     Contains the common logic for Rfxtrx lights and switches.
-
     """
 
     def __init__(self, name, event, datas, signal_repetitions):
@@ -327,7 +327,6 @@ class RfxtrxDevice(Entity):
         self.update_ha_state()
 
     def _send_command(self, command, brightness=0):
-        # pylint: disable=too-many-return-statements,too-many-branches
         if not self._event:
             return
 

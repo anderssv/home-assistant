@@ -63,8 +63,6 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 class KodiDevice(MediaPlayerDevice):
     """Representation of a XBMC/Kodi device."""
 
-    # pylint: disable=too-many-public-methods, abstract-method
-    # pylint: disable=too-many-instance-attributes
     def __init__(self, name, url, auth=None, turn_off_action=None):
         """Initialize the Kodi device."""
         import jsonrpc_requests
@@ -106,7 +104,7 @@ class KodiDevice(MediaPlayerDevice):
         if len(self._players) == 0:
             return STATE_IDLE
 
-        if self._properties['speed'] == 0:
+        if self._properties['speed'] == 0 and not self._properties['live']:
             return STATE_PAUSED
         else:
             return STATE_PLAYING
@@ -122,7 +120,7 @@ class KodiDevice(MediaPlayerDevice):
 
             self._properties = self._server.Player.GetProperties(
                 player_id,
-                ['time', 'totaltime', 'speed']
+                ['time', 'totaltime', 'speed', 'live']
             )
 
             self._item = self._server.Player.GetItem(
@@ -165,7 +163,7 @@ class KodiDevice(MediaPlayerDevice):
     @property
     def media_duration(self):
         """Duration of current playing media in seconds."""
-        if self._properties is not None:
+        if self._properties is not None and not self._properties['live']:
             total_time = self._properties['totaltime']
 
             return (

@@ -2,7 +2,7 @@
 Tellstick Component.
 
 For more details about this component, please refer to the documentation at
-https://home-assistant.io/components/Tellstick/
+https://home-assistant.io/components/tellstick/
 """
 import logging
 import threading
@@ -111,7 +111,7 @@ class TellstickRegistry(object):
         entity = self._id_to_entity_map.get(tellstick_id, None)
         if entity is not None:
             entity.set_tellstick_state(method, data)
-            entity.update_ha_state()
+            entity.schedule_update_ha_state()
 
     def _setup_device_callback(self, hass, tellcore_lib):
         """Register the callback handler."""

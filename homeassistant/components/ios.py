@@ -2,8 +2,9 @@
 Native Home Assistant iOS app component.
 
 For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/ios/
+https://home-assistant.io/ecosystem/ios/
 """
+import asyncio
 import os
 import json
 import logging
@@ -13,22 +14,20 @@ from voluptuous.humanize import humanize_error
 
 from homeassistant.helpers import config_validation as cv
 
-import homeassistant.loader as loader
-
 from homeassistant.helpers import discovery
+
+from homeassistant.core import callback
 
 from homeassistant.components.http import HomeAssistantView
 
 from homeassistant.const import (HTTP_INTERNAL_SERVER_ERROR,
                                  HTTP_BAD_REQUEST)
 
-from homeassistant.components.notify import DOMAIN as NotifyDomain
-
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ios"
 
-DEPENDENCIES = ["http"]
+DEPENDENCIES = ["device_tracker", "http", "zeroconf"]
 
 CONF_PUSH = "push"
 CONF_PUSH_CATEGORIES = "categories"
@@ -245,34 +244,17 @@ def setup(hass, config):
     if CONFIG_FILE == {}:
         CONFIG_FILE[ATTR_DEVICES] = {}
 
-    device_tracker = loader.get_component("device_tracker")
-    if device_tracker.DOMAIN not in hass.config.components:
-        device_tracker.setup(hass, {})
-        # Need this to enable requirements checking in the app.
-        hass.config.components.append(device_tracker.DOMAIN)
-
-    if "notify.ios" not in hass.config.components:
-        notify = loader.get_component("notify.ios")
-        notify.get_service(hass, {})
-        # Need this to enable requirements checking in the app.
-        if NotifyDomain not in hass.config.components:
-            hass.config.components.append(NotifyDomain)
-
-    zeroconf = loader.get_component("zeroconf")
-    if zeroconf.DOMAIN not in hass.config.components:
-        zeroconf.setup(hass, config)
-        # Need this to enable requirements checking in the app.
-        hass.config.components.append(zeroconf.DOMAIN)
+    # Notify needs to have discovery
+    # notify_config = {"notify": {CONF_PLATFORM: "ios"}}
+    # bootstrap.setup_component(hass, "notify", notify_config)
 
     discovery.load_platform(hass, "sensor", DOMAIN, {}, config)
 
-    hass.wsgi.register_view(iOSIdentifyDeviceView(hass))
+    hass.http.register_view(iOSIdentifyDeviceView(hass))
 
-    if config.get(DOMAIN) is not None:
-        app_config = config[DOMAIN]
-        if app_config.get(CONF_PUSH) is not None:
-            push_config = app_config[CONF_PUSH]
-            hass.wsgi.register_view(iOSPushConfigView(hass, push_config))
+    app_config = config.get(DOMAIN, {})
+    hass.http.register_view(iOSPushConfigView(hass,
+                                              app_config.get(CONF_PUSH, {})))
 
     return True
 
@@ -289,6 +271,7 @@ class iOSPushConfigView(HomeAssistantView):
         super().__init__(hass)
         self.push_config = push_config
 
+    @callback
     def get(self, request):
         """Handle the GET request for the push configuration."""
         return self.json(self.push_config)
@@ -304,10 +287,16 @@ class iOSIdentifyDeviceView(HomeAssistantView):
         """Init the view."""
         super().__init__(hass)
 
+    @asyncio.coroutine
     def post(self, request):
         """Handle the POST request for device identification."""
         try:
-            data = IDENTIFY_SCHEMA(request.json)
+            req_data = yield from request.json()
+        except ValueError:
+            return self.json_message('Invalid JSON', HTTP_BAD_REQUEST)
+
+        try:
+            data = IDENTIFY_SCHEMA(req_data)
         except vol.Invalid as ex:
             return self.json_message(humanize_error(request.json, ex),
                                      HTTP_BAD_REQUEST)

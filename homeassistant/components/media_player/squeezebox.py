@@ -111,9 +111,11 @@ class LogitechMediaServer(object):
 
     def query(self, *parameters):
         """Send request and await response from server."""
-        response = urllib.parse.unquote(self.get(' '.join(parameters)))
+        response = self.get(' '.join(parameters))
+        response = response.split(' ')[-1].strip()
+        response = urllib.parse.unquote(response)
 
-        return response.split(' ')[-1].strip()
+        return response
 
     def get_player_status(self, player):
         """Get the status of a player."""
@@ -163,7 +165,7 @@ class LogitechMediaServer(object):
 
             return response
 
-        except (OSError, ConnectionError, EOFError) as error:
+        except (OSError, EOFError) as error:
             _LOGGER.error("Could not communicate with %s:%d: %s",
                           self.host,
                           self.port,
@@ -171,12 +173,9 @@ class LogitechMediaServer(object):
             return None
 
 
-# pylint: disable=too-many-instance-attributes
-# pylint: disable=too-many-public-methods
 class SqueezeBoxDevice(MediaPlayerDevice):
     """Representation of a SqueezeBox device."""
 
-    # pylint: disable=too-many-arguments, abstract-method
     def __init__(self, lms, player_id):
         """Initialize the SqeezeBox device."""
         super(SqueezeBoxDevice, self).__init__()
